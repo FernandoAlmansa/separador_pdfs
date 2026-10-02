@@ -7,7 +7,7 @@
 <meta name="description" content="Extraé, separá y rotá hojas de un PDF sin subirlo a ningún servidor. Todo se procesa en tu navegador.">
 <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect x='5' y='3' width='17' height='22' rx='2' fill='%232f5bea'/%3E%3Crect x='10' y='8' width='17' height='22' rx='2' fill='%23fff' stroke='%232f5bea' stroke-width='2'/%3E%3Cpath d='M14 15h9M14 19h9M14 23h6' stroke='%232f5bea' stroke-width='2' stroke-linecap='round'/%3E%3C/svg%3E">
 <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js"></script>
-<script src="https://cdnjs.cloudflare.com/ajax/libs/pdf-lib/1.17.1/pdf-lib.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/@cantoo/pdf-lib@2.11.1/dist/pdf-lib.min.js"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js"></script>
 <style>
 :root{
@@ -103,6 +103,7 @@ input.invalid{border-color:var(--danger);background:var(--danger-soft)}
 #rangeHelp.err{color:var(--danger)}
 .notice{border-radius:8px;padding:9px 12px;font-size:13.5px;background:var(--warn-soft);color:var(--warn);display:none}
 .notice.show{display:block}
+.notice.info{background:var(--accent-soft);color:var(--text)}
 
 /* Grid */
 .hint{color:var(--muted);font-size:13px;margin:0 2px 10px}
@@ -182,7 +183,7 @@ input.invalid{border-color:var(--danger);background:var(--danger-soft)}
         <button class="btn" id="change" type="button">Cambiar archivo</button>
       </div>
 
-      <div id="encWarn" class="notice">Este PDF tiene encriptación o restricciones. Si el resultado sale en blanco o da error, primero guardalo sin protección (por ejemplo, imprimiéndolo como PDF).</div>
+      <div id="encWarn" class="notice"></div>
 
       <div class="row">
         <div class="field grow">
@@ -344,19 +345,19 @@ input.invalid{border-color:var(--danger);background:var(--danger-soft)}
         if (err && err.name === 'PasswordException') throw new Error('El PDF pide contraseña para abrirse. Desbloquealo antes de separarlo.');
         throw new Error('No se pudo leer el PDF. Puede estar dañado.');
       }
-      const lib = await PDFLib.PDFDocument.load(bytes, { ignoreEncryption: true, updateMetadata: false });
-      if (id !== state.loadId) return;
+      if (id !== state.loadId) { pdfjs.destroy(); return; }
 
       if (state.pdfjs) state.pdfjs.destroy();
       Object.assign(state, {
-        pdfjs, lib, n: pdfjs.numPages, name: file.name,
+        pdfjs, lib: null, raster: false, encrypted: false, n: pdfjs.numPages, name: file.name,
         base: file.name.replace(/\.pdf$/i, '').replace(/[\\/:*?"<>|]+/g, '_') || 'documento',
         order: [], groups: [], rot: {}, last: null, rangeOk: true
       });
       els.fname.textContent = file.name;
       els.fname.title = file.name;
       els.fmeta.textContent = `${state.n} ${state.n === 1 ? 'hoja' : 'hojas'} · ${(file.size / 1048576).toFixed(file.size > 10485760 ? 0 : 1)} MB`;
-      els.encWarn.classList.toggle('show', lib.isEncrypted);
+      setNotice('');
+      state.libPromise = openLib(bytes, id);
       els.range.value = '';
       setRangeHelp();
 
@@ -374,6 +375,35 @@ input.invalid{border-color:var(--danger);background:var(--danger-soft)}
     } finally {
       if (id === state.loadId) els.loading.style.display = 'none';
     }
+  }
+
+  // Abre el PDF para copiar páginas. Si está encriptado (restricciones sin
+  // contraseña de apertura) lo desencripta; si no puede, pasa a modo imagen.
+  async function openLib(bytes, id) {
+    let lib = null, raster = false;
+    const encrypted = isEncrypted(bytes);
+    try {
+      lib = await PDFLib.PDFDocument.load(bytes, { password: '', updateMetadata: false });
+    } catch (err) {
+      console.warn('pdf-lib no pudo abrir/desencriptar:', err);
+      raster = true;
+    }
+    if (id !== state.loadId) return null;
+    Object.assign(state, { lib, raster, encrypted });
+    if (raster) setNotice('Este PDF usa una protección que no se puede quitar acá. Las hojas se exportan como imagen: se ven igual, pero el texto no se puede seleccionar.', 'warn');
+    else if (encrypted) setNotice('Este PDF tenía restricciones. Las hojas que descargues salen sin protección.', 'info');
+    return lib;
+  }
+  function isEncrypted(bytes) {
+    const tail = new TextDecoder('latin1').decode(bytes.subarray(Math.max(0, bytes.length - 4096)));
+    if (/\/Encrypt\s/.test(tail)) return true;
+    const head = new TextDecoder('latin1').decode(bytes.subarray(0, Math.min(bytes.length, 4096)));
+    return /\/Encrypt\s/.test(head);
+  }
+  function setNotice(msg, kind) {
+    els.encWarn.textContent = msg;
+    els.encWarn.classList.toggle('show', !!msg);
+    els.encWarn.classList.toggle('info', kind === 'info');
   }
 
   /* ---------- miniaturas ---------- */
@@ -583,6 +613,18 @@ input.invalid{border-color:var(--danger);background:var(--danger-soft)}
 
   /* ---------- generación ---------- */
   async function buildPdf(pages) {
+    await state.libPromise;
+    if (state.raster || !state.lib) return buildRaster(pages);
+    try { return await buildVector(pages); }
+    catch (err) {
+      console.warn('copia directa falló, uso modo imagen:', err);
+      state.raster = true;
+      setNotice('No se pudieron copiar las hojas tal cual. Se exportan como imagen: se ven igual, pero el texto no se puede seleccionar.', 'warn');
+      return buildRaster(pages);
+    }
+  }
+
+  async function buildVector(pages) {
     const out = await PDFLib.PDFDocument.create();
     const copied = await out.copyPages(state.lib, pages.map(p => p - 1));
     copied.forEach((pg, i) => {
@@ -590,6 +632,32 @@ input.invalid{border-color:var(--danger);background:var(--danger-soft)}
       if (extra) pg.setRotation(PDFLib.degrees((((pg.getRotation().angle || 0) + extra) % 360 + 360) % 360));
       out.addPage(pg);
     });
+    return out.save();
+  }
+
+  // Plan B: renderiza cada hoja con pdf.js (que sí lee el PDF) y la pega como JPEG.
+  async function buildRaster(pages, onPage) {
+    const out = await PDFLib.PDFDocument.create();
+    const canvas = document.createElement('canvas');
+    const ctx = canvas.getContext('2d', { alpha: false });
+    for (let i = 0; i < pages.length; i++) {
+      const p = pages[i];
+      if (pages.length > 1) els.goLabel.textContent = `Renderizando ${i + 1}/${pages.length}…`;
+      const page = await state.pdfjs.getPage(p);
+      const v1 = page.getViewport({ scale: 1 });
+      const scale = Math.min(200 / 72, 4000 / Math.max(v1.width, v1.height));
+      const vp = page.getViewport({ scale });
+      canvas.width = Math.ceil(vp.width); canvas.height = Math.ceil(vp.height);
+      ctx.fillStyle = '#fff'; ctx.fillRect(0, 0, canvas.width, canvas.height);
+      await page.render({ canvasContext: ctx, viewport: vp }).promise;
+      page.cleanup();
+      const blob = await new Promise(r => canvas.toBlob(r, 'image/jpeg', 0.88));
+      const img = await out.embedJpg(await blob.arrayBuffer());
+      const pg = out.addPage([v1.width, v1.height]);
+      pg.drawImage(img, { x: 0, y: 0, width: v1.width, height: v1.height });
+      if (state.rot[p]) pg.setRotation(PDFLib.degrees(state.rot[p]));
+    }
+    canvas.width = canvas.height = 0;
     return out.save();
   }
 
@@ -628,7 +696,7 @@ input.invalid{border-color:var(--danger);background:var(--danger-soft)}
       }
     } catch (err) {
       console.error(err);
-      toast('No se pudo generar el PDF' + (state.lib?.isEncrypted ? ' (el original está protegido).' : '.'), 5000);
+      toast('No se pudo generar el PDF. Probá con menos hojas o recargá la página.', 5000);
     } finally {
       busy = false;
       els.goLabel.textContent = prev;
