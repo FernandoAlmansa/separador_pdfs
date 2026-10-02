@@ -1,0 +1,643 @@
+<!doctype html>
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Separador de PDF</title>
+<meta name="description" content="Extraé, separá y rotá hojas de un PDF sin subirlo a ningún servidor. Todo se procesa en tu navegador.">
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect x='5' y='3' width='17' height='22' rx='2' fill='%232f5bea'/%3E%3Crect x='10' y='8' width='17' height='22' rx='2' fill='%23fff' stroke='%232f5bea' stroke-width='2'/%3E%3Cpath d='M14 15h9M14 19h9M14 23h6' stroke='%232f5bea' stroke-width='2' stroke-linecap='round'/%3E%3C/svg%3E">
+<script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/pdf-lib/1.17.1/pdf-lib.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js"></script>
+<style>
+:root{
+  --bg:#f5f6f8; --surface:#ffffff; --surface-2:#eef0f4; --text:#16181d; --muted:#5d6472;
+  --border:#dcdfe6; --accent:#2f5bea; --accent-hover:#244bd0; --accent-ink:#ffffff; --accent-soft:#e6ecff;
+  --danger:#c0392b; --danger-soft:#fdecea; --warn:#8a5a00; --warn-soft:#fff4dc; --ok:#1e7d4f;
+  --shadow:0 1px 2px rgba(16,24,40,.06),0 1px 3px rgba(16,24,40,.08);
+  --radius:12px;
+  color-scheme:light;
+}
+@media (prefers-color-scheme:dark){
+  :root:not([data-theme="light"]){
+    --bg:#0f1115; --surface:#171a21; --surface-2:#1f232c; --text:#e8eaef; --muted:#9aa2b1;
+    --border:#2b303b; --accent:#6d8dff; --accent-hover:#87a1ff; --accent-ink:#0d1020; --accent-soft:#1e2742;
+    --danger:#ff7b6e; --danger-soft:#3a1d1a; --warn:#f3c56b; --warn-soft:#352a12; --ok:#5fd39a;
+    --shadow:0 1px 2px rgba(0,0,0,.4);
+    color-scheme:dark;
+  }
+}
+:root[data-theme="dark"]{
+  --bg:#0f1115; --surface:#171a21; --surface-2:#1f232c; --text:#e8eaef; --muted:#9aa2b1;
+  --border:#2b303b; --accent:#6d8dff; --accent-hover:#87a1ff; --accent-ink:#0d1020; --accent-soft:#1e2742;
+  --danger:#ff7b6e; --danger-soft:#3a1d1a; --warn:#f3c56b; --warn-soft:#352a12; --ok:#5fd39a;
+  --shadow:0 1px 2px rgba(0,0,0,.4);
+  color-scheme:dark;
+}
+*{box-sizing:border-box}
+[hidden]{display:none!important}
+html,body{margin:0}
+body{
+  background:var(--bg); color:var(--text);
+  font:15px/1.5 system-ui,-apple-system,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;
+  -webkit-font-smoothing:antialiased; min-height:100vh;
+}
+.wrap{max-width:1120px;margin:0 auto;padding:24px 16px 64px}
+header.top{display:flex;align-items:center;justify-content:space-between;gap:12px;margin-bottom:20px}
+header.top h1{font-size:22px;margin:0;letter-spacing:-.01em}
+header.top p{margin:2px 0 0;color:var(--muted);font-size:14px}
+.privacy{display:inline-flex;align-items:center;gap:6px;font-size:13px;color:var(--ok);white-space:nowrap}
+.privacy svg{flex:none}
+
+/* Drop zone */
+.drop{
+  display:flex;flex-direction:column;align-items:center;justify-content:center;gap:10px;text-align:center;
+  border:2px dashed var(--border);border-radius:var(--radius);background:var(--surface);
+  padding:56px 20px;cursor:pointer;transition:border-color .15s,background .15s;
+}
+.drop:hover,.drop.over{border-color:var(--accent);background:var(--accent-soft)}
+.drop strong{font-size:17px}
+.drop span{color:var(--muted);font-size:14px}
+.drop svg{color:var(--accent)}
+
+/* Buttons & inputs */
+button,select,input{font:inherit;color:inherit}
+.btn{
+  display:inline-flex;align-items:center;justify-content:center;gap:6px;
+  border:1px solid var(--border);background:var(--surface);color:var(--text);
+  border-radius:8px;padding:7px 12px;cursor:pointer;font-size:14px;line-height:1.2;white-space:nowrap;
+}
+.btn:hover{background:var(--surface-2)}
+.btn:focus-visible,.thumb:focus-visible,.rot:focus-visible,input:focus-visible,select:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
+.btn.primary{background:var(--accent);border-color:var(--accent);color:var(--accent-ink);font-weight:600;padding:9px 16px}
+.btn.primary:hover{background:var(--accent-hover)}
+.btn:disabled{opacity:.5;cursor:not-allowed}
+.btn.ghost{border-color:transparent;background:transparent;color:var(--muted)}
+.btn.ghost:hover{color:var(--text);background:var(--surface-2)}
+input[type=text],input[type=number],select{
+  background:var(--surface);border:1px solid var(--border);border-radius:8px;padding:8px 10px;font-size:14px;min-width:0;
+}
+input.invalid{border-color:var(--danger);background:var(--danger-soft)}
+
+/* Workspace */
+#work{display:none}
+.panel{
+  position:sticky;top:0;z-index:5;background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);
+  box-shadow:var(--shadow);padding:14px;margin-bottom:16px;display:grid;gap:12px;
+}
+.filebar{display:flex;align-items:center;gap:10px;min-width:0}
+.filebar .name{font-weight:600;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;min-width:0}
+.filebar .meta{color:var(--muted);font-size:13px;white-space:nowrap}
+.filebar .spacer{flex:1}
+.row{display:flex;flex-wrap:wrap;align-items:flex-end;gap:10px}
+.field{display:grid;gap:4px;min-width:0}
+.field label{font-size:12px;color:var(--muted);font-weight:600;text-transform:uppercase;letter-spacing:.04em}
+.field.grow{flex:1 1 260px}
+.field.grow input{width:100%}
+#everyField input{width:76px}
+.quick{display:flex;gap:6px;flex-wrap:wrap}
+.foot{display:flex;align-items:center;justify-content:space-between;gap:12px;flex-wrap:wrap;border-top:1px solid var(--border);padding-top:12px}
+#summary{font-size:14px;color:var(--muted);min-width:0}
+#summary b{color:var(--text)}
+#rangeHelp{font-size:12.5px;color:var(--muted);margin-top:2px}
+#rangeHelp.err{color:var(--danger)}
+.notice{border-radius:8px;padding:9px 12px;font-size:13.5px;background:var(--warn-soft);color:var(--warn);display:none}
+.notice.show{display:block}
+
+/* Grid */
+.hint{color:var(--muted);font-size:13px;margin:0 2px 10px}
+.grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(132px,1fr));gap:14px}
+.card{position:relative}
+.thumb{
+  display:block;width:100%;padding:8px;border-radius:10px;border:2px solid var(--border);background:var(--surface);
+  cursor:pointer;text-align:center;transition:border-color .12s,box-shadow .12s,background .12s;
+}
+.thumb:hover{border-color:var(--muted)}
+.card.sel .thumb{border-color:var(--accent);background:var(--accent-soft);box-shadow:0 0 0 1px var(--accent)}
+.cv{
+  width:100%;aspect-ratio:var(--ar,0.7071);display:flex;align-items:center;justify-content:center;
+  background:var(--surface-2);border-radius:4px;overflow:hidden;
+}
+.cv canvas{max-width:100%;max-height:100%;display:block;background:#fff;box-shadow:0 0 0 1px rgba(0,0,0,.08);transition:transform .2s}
+.num{display:block;margin-top:6px;font-size:13px;color:var(--muted);font-variant-numeric:tabular-nums}
+.card.sel .num{color:var(--accent);font-weight:600}
+.badge{
+  position:absolute;top:2px;left:2px;min-width:24px;height:24px;padding:0 7px;border-radius:12px;
+  background:var(--accent);color:var(--accent-ink);font-size:12px;font-weight:700;display:none;
+  align-items:center;justify-content:center;font-variant-numeric:tabular-nums;pointer-events:none;
+}
+.card.sel .badge{display:flex}
+.rot{
+  position:absolute;top:2px;right:2px;width:30px;height:30px;border-radius:8px;border:1px solid var(--border);
+  background:var(--surface);color:var(--muted);display:flex;align-items:center;justify-content:center;cursor:pointer;
+  opacity:0;transition:opacity .12s;
+}
+.card:hover .rot,.rot:focus-visible,.card.rotated .rot{opacity:1}
+.card.rotated .rot{color:var(--accent);border-color:var(--accent)}
+@media (hover:none){.rot{opacity:1}}
+
+#status{position:fixed;left:50%;bottom:20px;transform:translateX(-50%);max-width:calc(100% - 32px);
+  background:var(--text);color:var(--bg);padding:10px 16px;border-radius:10px;font-size:14px;box-shadow:var(--shadow);
+  opacity:0;pointer-events:none;transition:opacity .2s;z-index:20}
+#status.show{opacity:1}
+#loading{display:none;text-align:center;color:var(--muted);padding:40px 0}
+
+@media (max-width:600px){
+  header.top{flex-direction:column;align-items:flex-start}
+  .grid{grid-template-columns:repeat(auto-fill,minmax(96px,1fr));gap:10px}
+  .panel{position:static}
+  .foot .btn.primary{width:100%}
+  .filebar .meta{display:none}
+}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header class="top">
+    <div>
+      <h1>Separador de PDF</h1>
+      <p>Elegí hojas, extraelas o partí el documento en varios archivos.</p>
+    </div>
+    <span class="privacy">
+      <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="4" y="11" width="16" height="10" rx="2"/><path d="M8 11V7a4 4 0 0 1 8 0v4"/></svg>
+      El archivo no sale de tu navegador
+    </span>
+  </header>
+
+  <label id="drop" class="drop" tabindex="0">
+    <svg width="40" height="40" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M14 3H7a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V8z"/><path d="M14 3v5h5"/><path d="M12 18v-6"/><path d="m9 15 3-3 3 3"/></svg>
+    <strong>Arrastrá un PDF acá o hacé clic para elegirlo</strong>
+    <span>Se procesa todo localmente, no se sube a ningún lado</span>
+    <input id="file" type="file" accept="application/pdf,.pdf" hidden>
+  </label>
+
+  <div id="loading">Abriendo PDF…</div>
+
+  <section id="work">
+    <div class="panel">
+      <div class="filebar">
+        <span class="name" id="fname"></span>
+        <span class="meta" id="fmeta"></span>
+        <span class="spacer"></span>
+        <button class="btn" id="change" type="button">Cambiar archivo</button>
+      </div>
+
+      <div id="encWarn" class="notice">Este PDF tiene encriptación o restricciones. Si el resultado sale en blanco o da error, primero guardalo sin protección (por ejemplo, imprimiéndolo como PDF).</div>
+
+      <div class="row">
+        <div class="field grow">
+          <label for="range">Hojas</label>
+          <input id="range" type="text" inputmode="numeric" autocomplete="off" spellcheck="false" placeholder="Ej.: 1-3, 5, 8-">
+          <div id="rangeHelp">Rangos separados por coma. «8-» va hasta el final, «10-1» invierte. El orden que escribas es el orden de salida.</div>
+        </div>
+        <div class="field">
+          <label>Selección rápida</label>
+          <div class="quick">
+            <button class="btn" type="button" data-q="all">Todas</button>
+            <button class="btn" type="button" data-q="none">Ninguna</button>
+            <button class="btn" type="button" data-q="invert">Invertir</button>
+            <button class="btn" type="button" data-q="odd">Impares</button>
+            <button class="btn" type="button" data-q="even">Pares</button>
+          </div>
+        </div>
+      </div>
+
+      <div class="row">
+        <div class="field">
+          <label for="mode">Qué querés obtener</label>
+          <select id="mode">
+            <option value="one">Un PDF con las hojas elegidas</option>
+            <option value="ranges">Un PDF por cada rango</option>
+            <option value="every">Partir cada N hojas</option>
+            <option value="single">Un PDF por hoja</option>
+          </select>
+        </div>
+        <div class="field" id="everyField" hidden>
+          <label for="every">N</label>
+          <input id="every" type="number" min="1" value="2">
+        </div>
+      </div>
+
+      <div class="foot">
+        <div id="summary"></div>
+        <button class="btn primary" id="go" type="button" disabled>
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 4v11"/><path d="m7 10 5 5 5-5"/><path d="M5 20h14"/></svg>
+          <span id="goLabel">Descargar</span>
+        </button>
+      </div>
+    </div>
+
+    <p class="hint">Clic para marcar o desmarcar · Shift+clic marca un tramo · ↻ rota la hoja en el resultado</p>
+    <div class="grid" id="grid"></div>
+  </section>
+</div>
+<div id="status" role="status" aria-live="polite"></div>
+
+<script>
+(() => {
+  'use strict';
+  const $ = s => document.querySelector(s);
+  const libsOk = window.pdfjsLib && window.PDFLib && window.JSZip;
+
+  const els = {
+    drop: $('#drop'), file: $('#file'), loading: $('#loading'), work: $('#work'),
+    fname: $('#fname'), fmeta: $('#fmeta'), change: $('#change'), encWarn: $('#encWarn'),
+    range: $('#range'), rangeHelp: $('#rangeHelp'), mode: $('#mode'), everyField: $('#everyField'),
+    every: $('#every'), summary: $('#summary'), go: $('#go'), goLabel: $('#goLabel'), grid: $('#grid'), status: $('#status')
+  };
+  const HELP = els.rangeHelp.textContent;
+
+  if (!libsOk) {
+    els.drop.querySelector('strong').textContent = 'No se pudieron cargar las librerías';
+    els.drop.querySelector('span').textContent = 'Revisá tu conexión a internet y recargá la página.';
+    return;
+  }
+  pdfjsLib.GlobalWorkerOptions.workerSrc = 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js';
+
+  const state = {
+    loadId: 0, name: '', base: 'documento', pdfjs: null, lib: null, n: 0,
+    order: [],      // páginas elegidas, en orden de salida (1-based)
+    groups: [],     // rangos tal como se escribieron
+    rot: {},        // rotación extra por página
+    last: null,     // última página clickeada (para shift)
+    rangeOk: true
+  };
+
+  /* ---------- utilidades ---------- */
+  let statusTimer;
+  function toast(msg, ms = 3500) {
+    els.status.textContent = msg;
+    els.status.classList.add('show');
+    clearTimeout(statusTimer);
+    statusTimer = setTimeout(() => els.status.classList.remove('show'), ms);
+  }
+  const range = (a, b) => { const s = a <= b ? 1 : -1, r = []; for (let i = a; s > 0 ? i <= b : i >= b; i += s) r.push(i); return r; };
+
+  // "1-3, 5, 8-" -> grupos de páginas
+  function parseRanges(str, max) {
+    const groups = [], errors = [];
+    for (const raw of str.split(/[,;]+/)) {
+      const t = raw.trim().replace(/\s+/g, '');
+      if (!t) continue;
+      let m;
+      if ((m = t.match(/^(\d+)$/))) {
+        const n = +m[1];
+        if (n < 1 || n > max) errors.push(`${t} (el PDF tiene ${max} hojas)`); else groups.push([n]);
+      } else if ((m = t.match(/^(\d*)[-–](\d*)$/)) && (m[1] || m[2])) {
+        const a = m[1] ? +m[1] : 1, b = m[2] ? +m[2] : max;
+        if (a < 1 || b < 1 || a > max || b > max) errors.push(`${t} (el PDF tiene ${max} hojas)`);
+        else groups.push(range(a, b));
+      } else errors.push(t);
+    }
+    return { groups, errors };
+  }
+
+  // agrupa tramos consecutivos (ascendentes o descendentes)
+  function runs(list) {
+    const out = [];
+    for (const p of list) {
+      const cur = out[out.length - 1];
+      if (cur) {
+        const last = cur[cur.length - 1];
+        const dir = cur.length > 1 ? cur[1] - cur[0] : p - last;
+        if ((dir === 1 || dir === -1) && p - last === dir) { cur.push(p); continue; }
+      }
+      out.push([p]);
+    }
+    return out;
+  }
+  const label = g => g.length === 1 ? String(g[0]) : `${g[0]}-${g[g.length - 1]}`;
+  const compact = list => runs(list).map(label).join(', ');
+
+  function fileLabel(pages) {
+    let s = runs(pages).map(label).join('_');
+    if (s.length > 40) s = `${pages[0]}-${pages[pages.length - 1]}_${pages.length}hojas`;
+    return s;
+  }
+
+  /* ---------- carga ---------- */
+  els.file.addEventListener('change', e => { loadFile(e.target.files[0]); e.target.value = ''; });
+  els.change.addEventListener('click', () => els.file.click());
+  els.drop.addEventListener('keydown', e => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); els.file.click(); } });
+
+  let dragDepth = 0;
+  window.addEventListener('dragenter', e => { e.preventDefault(); dragDepth++; els.drop.classList.add('over'); });
+  window.addEventListener('dragleave', () => { if (--dragDepth <= 0) { dragDepth = 0; els.drop.classList.remove('over'); } });
+  window.addEventListener('dragover', e => e.preventDefault());
+  window.addEventListener('drop', e => {
+    e.preventDefault(); dragDepth = 0; els.drop.classList.remove('over');
+    const f = [...(e.dataTransfer?.files || [])].find(f => f.type === 'application/pdf' || /\.pdf$/i.test(f.name));
+    if (f) loadFile(f); else toast('Soltá un archivo PDF.');
+  });
+
+  async function loadFile(file) {
+    if (!file) return;
+    if (file.type !== 'application/pdf' && !/\.pdf$/i.test(file.name)) { toast('Eso no parece un PDF.'); return; }
+    const id = ++state.loadId;
+    els.loading.style.display = 'block';
+    try {
+      const bytes = new Uint8Array(await file.arrayBuffer());
+      let pdfjs;
+      try {
+        pdfjs = await pdfjsLib.getDocument({ data: bytes.slice() }).promise;
+      } catch (err) {
+        if (err && err.name === 'PasswordException') throw new Error('El PDF pide contraseña para abrirse. Desbloquealo antes de separarlo.');
+        throw new Error('No se pudo leer el PDF. Puede estar dañado.');
+      }
+      const lib = await PDFLib.PDFDocument.load(bytes, { ignoreEncryption: true, updateMetadata: false });
+      if (id !== state.loadId) return;
+
+      if (state.pdfjs) state.pdfjs.destroy();
+      Object.assign(state, {
+        pdfjs, lib, n: pdfjs.numPages, name: file.name,
+        base: file.name.replace(/\.pdf$/i, '').replace(/[\\/:*?"<>|]+/g, '_') || 'documento',
+        order: [], groups: [], rot: {}, last: null, rangeOk: true
+      });
+      els.fname.textContent = file.name;
+      els.fname.title = file.name;
+      els.fmeta.textContent = `${state.n} ${state.n === 1 ? 'hoja' : 'hojas'} · ${(file.size / 1048576).toFixed(file.size > 10485760 ? 0 : 1)} MB`;
+      els.encWarn.classList.toggle('show', lib.isEncrypted);
+      els.range.value = '';
+      setRangeHelp();
+
+      const p1 = await pdfjs.getPage(1);
+      const v = p1.getViewport({ scale: 1 });
+      els.grid.style.setProperty('--ar', (v.width / v.height).toFixed(4));
+
+      els.drop.style.display = 'none';
+      els.work.style.display = 'block';
+      buildGrid(id);
+      update();
+    } catch (err) {
+      console.error(err);
+      if (id === state.loadId) toast(err.message || 'No se pudo abrir el PDF.', 5000);
+    } finally {
+      if (id === state.loadId) els.loading.style.display = 'none';
+    }
+  }
+
+  /* ---------- miniaturas ---------- */
+  const ROT_ICON = '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M21 12a9 9 0 1 1-2.64-6.36"/><path d="M21 3v6h-6"/></svg>';
+  let observer, queue = [], active = 0;
+  const cards = [];
+
+  function buildGrid(id) {
+    if (observer) observer.disconnect();
+    queue = []; cards.length = 0;
+    els.grid.innerHTML = '';
+    const frag = document.createDocumentFragment();
+    for (let p = 1; p <= state.n; p++) {
+      const card = document.createElement('div');
+      card.className = 'card';
+      card.dataset.p = p;
+      card.innerHTML =
+        `<button type="button" class="thumb" aria-pressed="false" aria-label="Hoja ${p}">` +
+          `<div class="cv"><canvas width="1" height="1"></canvas></div><span class="num">${p}</span></button>` +
+        `<span class="badge"></span>` +
+        `<button type="button" class="rot" title="Rotar 90°" aria-label="Rotar hoja ${p}">${ROT_ICON}</button>`;
+      cards.push(card);
+      frag.appendChild(card);
+    }
+    els.grid.appendChild(frag);
+    observer = new IntersectionObserver(entries => {
+      for (const e of entries) if (e.isIntersecting) {
+        observer.unobserve(e.target);
+        queue.push([+e.target.dataset.p, e.target, id]);
+      }
+      pump();
+    }, { rootMargin: '600px 0px' });
+    cards.forEach(c => observer.observe(c));
+  }
+
+  function pump() {
+    while (active < 3 && queue.length) {
+      const [p, card, id] = queue.shift();
+      if (id !== state.loadId) continue;
+      active++;
+      renderThumb(p, card, id).catch(err => console.warn('miniatura', p, err)).finally(() => { active--; pump(); });
+    }
+  }
+
+  async function renderThumb(p, card, id) {
+    const page = await state.pdfjs.getPage(p);
+    if (id !== state.loadId) return;
+    const v1 = page.getViewport({ scale: 1 });
+    const target = 200 * Math.min(window.devicePixelRatio || 1, 2);
+    const vp = page.getViewport({ scale: target / Math.max(v1.width, v1.height) });
+    const canvas = document.createElement('canvas');
+    canvas.width = Math.ceil(vp.width); canvas.height = Math.ceil(vp.height);
+    await page.render({ canvasContext: canvas.getContext('2d', { alpha: false }), viewport: vp }).promise;
+    page.cleanup();
+    if (id !== state.loadId) return;
+    const old = card.querySelector('canvas');
+    old.replaceWith(canvas);
+    applyRot(card, p);
+  }
+
+  function applyRot(card, p) {
+    const r = state.rot[p] || 0;
+    const cv = card.querySelector('.cv'), canvas = card.querySelector('canvas');
+    let scale = 1;
+    if (r % 180 && canvas.width > 1) {
+      const boxW = cv.clientWidth, boxH = cv.clientHeight;
+      const k = Math.min(boxW / canvas.width, boxH / canvas.height);
+      const w = canvas.width * k, h = canvas.height * k;
+      scale = Math.min(boxW / h, boxH / w);
+    }
+    canvas.style.transform = r ? `rotate(${r}deg) scale(${scale})` : '';
+    card.classList.toggle('rotated', !!r);
+  }
+
+  /* ---------- selección ---------- */
+  els.grid.addEventListener('click', e => {
+    const card = e.target.closest('.card');
+    if (!card) return;
+    const p = +card.dataset.p;
+    if (e.target.closest('.rot')) {
+      state.rot[p] = ((state.rot[p] || 0) + 90) % 360;
+      if (!state.rot[p]) delete state.rot[p];
+      applyRot(card, p);
+      update();
+      return;
+    }
+    if (!e.target.closest('.thumb')) return;
+    let order = state.order.slice();
+    if (e.shiftKey && state.last && state.last !== p) {
+      const add = !order.includes(p);
+      const span = range(state.last, p);
+      if (add) span.forEach(x => { if (!order.includes(x)) order.push(x); });
+      else order = order.filter(x => !span.includes(x));
+    } else if (order.includes(p)) order = order.filter(x => x !== p);
+    else order.push(p);
+    state.last = p;
+    setOrder(order, true);
+  });
+
+  document.querySelectorAll('[data-q]').forEach(b => b.addEventListener('click', () => {
+    const all = range(1, state.n), q = b.dataset.q;
+    const order =
+      q === 'all' ? all :
+      q === 'none' ? [] :
+      q === 'odd' ? all.filter(p => p % 2) :
+      q === 'even' ? all.filter(p => !(p % 2)) :
+      all.filter(p => !state.order.includes(p));
+    state.last = null;
+    setOrder(order, true);
+  }));
+
+  function setOrder(order, writeText) {
+    state.order = order;
+    state.groups = runs(order);
+    state.rangeOk = true;
+    if (writeText) { els.range.value = compact(order); setRangeHelp(); }
+    update();
+  }
+
+  function setRangeHelp(err) {
+    els.range.classList.toggle('invalid', !!err);
+    els.rangeHelp.classList.toggle('err', !!err);
+    els.rangeHelp.textContent = err || HELP;
+  }
+
+  els.range.addEventListener('input', () => {
+    const { groups, errors } = parseRanges(els.range.value, state.n);
+    if (errors.length) {
+      state.rangeOk = false;
+      setRangeHelp('No entiendo: ' + errors.join(' · '));
+      update();
+      return;
+    }
+    setRangeHelp();
+    state.rangeOk = true;
+    state.order = groups.flat();
+    state.groups = groups;
+    update();
+  });
+  els.range.addEventListener('keydown', e => { if (e.key === 'Enter') { e.preventDefault(); if (!els.go.disabled) run(); } });
+  els.mode.addEventListener('change', update);
+  els.every.addEventListener('input', update);
+
+  /* ---------- plan de salida ---------- */
+  function plan() {
+    const mode = els.mode.value;
+    if (!state.rangeOk) return { error: 'Corregí el rango de hojas.' };
+    const sel = state.order;
+    const src = sel.length ? sel : range(1, state.n);
+    let files = [];
+    if (mode === 'one') {
+      if (!sel.length) return { error: 'Elegí al menos una hoja.' };
+      files = [{ pages: sel, name: `${state.base}_hojas_${fileLabel(sel)}.pdf` }];
+    } else if (mode === 'ranges') {
+      if (!state.groups.length) return { error: 'Escribí o marcá los rangos que querés separar.' };
+      files = state.groups.map(g => ({ pages: g, name: `${state.base}_hojas_${fileLabel(g)}.pdf` }));
+    } else if (mode === 'every') {
+      const n = Math.floor(+els.every.value);
+      if (!(n >= 1)) return { error: 'Indicá cada cuántas hojas partir.' };
+      const total = Math.ceil(src.length / n), pad = String(total).length;
+      for (let i = 0; i < src.length; i += n) {
+        const g = src.slice(i, i + n);
+        files.push({ pages: g, name: `${state.base}_parte${String(i / n + 1).padStart(pad, '0')}_hojas_${fileLabel(g)}.pdf` });
+      }
+    } else {
+      const pad = String(state.n).length;
+      files = src.map(p => ({ pages: [p], name: `${state.base}_hoja${String(p).padStart(pad, '0')}.pdf` }));
+    }
+    const seen = {};
+    files.forEach(f => {
+      if (seen[f.name]) f.name = f.name.replace(/\.pdf$/, `_${++seen[f.name]}.pdf`);
+      else seen[f.name] = 1;
+    });
+    return { files, usesAll: !sel.length && (mode === 'every' || mode === 'single') };
+  }
+
+  function update() {
+    els.everyField.hidden = els.mode.value !== 'every';
+    const pos = new Map();
+    state.order.forEach((p, i) => { if (!pos.has(p)) pos.set(p, i + 1); });
+    const showOrder = state.order.some((p, i) => i && p < state.order[i - 1]);
+    for (const card of cards) {
+      const p = +card.dataset.p, sel = pos.has(p);
+      card.classList.toggle('sel', sel);
+      card.querySelector('.thumb').setAttribute('aria-pressed', sel);
+      card.querySelector('.badge').textContent = sel ? (showOrder ? pos.get(p) : '✓') : '';
+    }
+
+    const pl = plan();
+    els.go.disabled = !!pl.error;
+    if (pl.error) {
+      els.summary.textContent = pl.error;
+      els.goLabel.textContent = 'Descargar';
+      return;
+    }
+    const pages = pl.files.reduce((a, f) => a + f.pages.length, 0);
+    const rots = new Set(pl.files.flatMap(f => f.pages).filter(p => state.rot[p])).size;
+    const nf = pl.files.length;
+    let txt = nf === 1
+      ? `<b>1 PDF</b> con ${pages} ${pages === 1 ? 'hoja' : 'hojas'}`
+      : `<b>${nf} PDFs</b> en un .zip · ${pages} hojas en total`;
+    if (pl.usesAll) txt += ' · sin selección, se usa todo el documento';
+    if (rots) txt += ` · ${rots} ${rots === 1 ? 'hoja rotada' : 'hojas rotadas'}`;
+    els.summary.innerHTML = txt;
+    els.goLabel.textContent = nf === 1 ? 'Descargar PDF' : `Descargar .zip (${nf})`;
+  }
+
+  /* ---------- generación ---------- */
+  async function buildPdf(pages) {
+    const out = await PDFLib.PDFDocument.create();
+    const copied = await out.copyPages(state.lib, pages.map(p => p - 1));
+    copied.forEach((pg, i) => {
+      const extra = state.rot[pages[i]] || 0;
+      if (extra) pg.setRotation(PDFLib.degrees((((pg.getRotation().angle || 0) + extra) % 360 + 360) % 360));
+      out.addPage(pg);
+    });
+    return out.save();
+  }
+
+  function save(blob, name) {
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url; a.download = name;
+    document.body.appendChild(a); a.click(); a.remove();
+    setTimeout(() => URL.revokeObjectURL(url), 30000);
+  }
+
+  let busy = false;
+  els.go.addEventListener('click', run);
+  async function run() {
+    const pl = plan();
+    if (pl.error || busy) return;
+    busy = true; els.go.disabled = true;
+    const prev = els.goLabel.textContent;
+    try {
+      if (pl.files.length === 1) {
+        els.goLabel.textContent = 'Generando…';
+        const bytes = await buildPdf(pl.files[0].pages);
+        save(new Blob([bytes], { type: 'application/pdf' }), pl.files[0].name);
+        toast('Listo: ' + pl.files[0].name);
+      } else {
+        const zip = new JSZip();
+        for (let i = 0; i < pl.files.length; i++) {
+          els.goLabel.textContent = `Generando ${i + 1}/${pl.files.length}…`;
+          zip.file(pl.files[i].name, await buildPdf(pl.files[i].pages));
+          if (i % 10 === 9) await new Promise(r => setTimeout(r));
+        }
+        els.goLabel.textContent = 'Comprimiendo…';
+        const blob = await zip.generateAsync({ type: 'blob' });
+        save(blob, `${state.base}_separado.zip`);
+        toast(`Listo: ${pl.files.length} PDFs en ${state.base}_separado.zip`);
+      }
+    } catch (err) {
+      console.error(err);
+      toast('No se pudo generar el PDF' + (state.lib?.isEncrypted ? ' (el original está protegido).' : '.'), 5000);
+    } finally {
+      busy = false;
+      els.goLabel.textContent = prev;
+      update();
+    }
+  }
+
+  window.addEventListener('resize', () => cards.forEach(c => { const p = +c.dataset.p; if (state.rot[p]) applyRot(c, p); }));
+})();
+</script>
+</body>
+</html>
